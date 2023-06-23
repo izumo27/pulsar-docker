@@ -1,3 +1,6 @@
+## Requirements
+- docker
+
 ## 使い方
 #### 起動
 ```
@@ -37,3 +40,6 @@ $ docker exec -it east-client bin/pulsar-client produce -m 'message' -n 1 persis
 ```
 $ docker compose down
 ```
+
+## 備考
+containerの起動に失敗するときはメモリ割り当てを増やすと成功する可能性があります
