@@ -1,0 +1,290 @@
+version: '3.9'
+
+networks:
+  pulsar:
+    name: pulsar
+    driver: bridge
+
+services:
+  # Start global zookeeper
+  global-zookeeper:
+    image: apachepulsar/pulsar:latest
+    container_name: global-zookeeper
+    restart: on-failure
+    networks:
+      - pulsar
+    volumes:
+      - ./data/global-zookeeper:/pulsar/data/global-zookeeper
+      - ./scripts/pulsar-global-zookeeper-ruok.sh:/pulsar/bin/pulsar-global-zookeeper-ruok.sh
+    command: >
+      bash -c "bin/apply-config-from-env.py conf/global_zookeeper.conf && \
+             bin/generate-zookeeper-config.sh conf/global_zookeeper.conf && \
+             exec bin/pulsar global-zookeeper conf/global_zookeeper.conf"
+    healthcheck:
+      test: ["CMD", "bin/pulsar-global-zookeeper-ruok.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Start east zookeeper
+  east-zookeeper:
+    image: apachepulsar/pulsar:latest
+    container_name: east-zookeeper
+    restart: on-failure
+    networks:
+      - pulsar
+    volumes:
+      - ./data/east-zookeeper:/pulsar/data/zookeeper
+    environment:
+      - metadataStoreUrl=zk:east-zookeeper:2181
+      - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
+    command: >
+      bash -c "bin/apply-config-from-env.py conf/zookeeper.conf && \
+             bin/generate-zookeeper-config.sh conf/zookeeper.conf && \
+             exec bin/pulsar zookeeper"
+    healthcheck:
+      test: ["CMD", "bin/pulsar-zookeeper-ruok.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Init east cluster metadata
+  east-pulsar-init:
+    container_name: east-pulsar-init
+    hostname: east-pulsar-init
+    image: apachepulsar/pulsar:latest
+    networks:
+      - pulsar
+    command: >
+      bin/pulsar initialize-cluster-metadata \
+               --cluster east \
+               --metadata-store east-zookeeper:2181 \
+               --configuration-metadata-store global-zookeeper:2184 \
+               --web-service-url http://east-broker:8080 \
+               --broker-service-url pulsar://east-broker:6650
+    depends_on:
+      east-zookeeper:
+        condition: service_healthy
+      global-zookeeper:
+        condition: service_healthy
+
+  # Start east bookie
+  east-bookie:
+    image: apachepulsar/pulsar:latest
+    container_name: east-bookie
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - clusterName=east
+      - metadataServiceUri=metadata-store:zk:east-zookeeper:2181
+      # otherwise every time we run docker compose uo or down we fail to start due to Cookie
+      # See: https://github.com/apache/bookkeeper/blob/405e72acf42bb1104299647ea8840d805094c787/bookkeeper-server/src/main/java/org/apache/bookkeeper/bookie/Cookie.java#L57-68
+      - advertisedAddress=east-bookie
+      - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
+    depends_on:
+      east-zookeeper:
+        condition: service_healthy
+      east-pulsar-init:
+        condition: service_completed_successfully
+    # Map the local directory to the container to avoid bookie startup failure due to insufficient container disks.
+    volumes:
+      - ./data/east-bookkeeper:/pulsar/data/bookkeeper
+    command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf && exec bin/pulsar bookie"
+
+  # Start east broker
+  east-broker:
+    image: apachepulsar/pulsar:latest
+    container_name: east-broker
+    hostname: east-broker
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - metadataStoreUrl=zk:east-zookeeper:2181
+      - configurationMetadataStoreUrl=zk:global-zookeeper:2184
+      - clusterName=east
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      # - advertisedAddress=broker
+      # - advertisedListeners=external:pulsar://127.0.0.1:6650
+      - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
+    depends_on:
+      global-zookeeper:
+        condition: service_healthy
+      east-zookeeper:
+        condition: service_healthy
+      east-bookie:
+        condition: service_started
+    # ports:
+    #   - "6650:6650"
+    #   - "8080:8080"
+    command: >
+      bash -c "bin/apply-config-from-env.py conf/broker.conf && \
+      exec bin/pulsar broker"
+
+  # Start west zookeeper
+  west-zookeeper:
+    image: apachepulsar/pulsar:latest
+    container_name: west-zookeeper
+    restart: on-failure
+    networks:
+      - pulsar
+    volumes:
+      - ./data/west-zookeeper:/pulsar/data/zookeeper
+    environment:
+      - metadataStoreUrl=zk:west-zookeeper:2181
+      - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
+    command: >
+      bash -c "bin/apply-config-from-env.py conf/zookeeper.conf && \
+             bin/generate-zookeeper-config.sh conf/zookeeper.conf && \
+             exec bin/pulsar zookeeper"
+    healthcheck:
+      test: ["CMD", "bin/pulsar-zookeeper-ruok.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Init west cluster metadata
+  west-pulsar-init:
+    container_name: west-pulsar-init
+    hostname: west-pulsar-init
+    image: apachepulsar/pulsar:latest
+    networks:
+      - pulsar
+    command: >
+      bin/pulsar initialize-cluster-metadata \
+               --cluster west \
+               --metadata-store west-zookeeper:2181 \
+               --configuration-metadata-store global-zookeeper:2184 \
+               --web-service-url http://west-broker:8080 \
+               --broker-service-url pulsar://west-broker:6650
+    depends_on:
+      west-zookeeper:
+        condition: service_healthy
+      global-zookeeper:
+        condition: service_healthy
+
+  # Start west bookie
+  west-bookie:
+    image: apachepulsar/pulsar:latest
+    container_name: west-bookie
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - clusterName=west
+      - metadataServiceUri=metadata-store:zk:west-zookeeper:2181
+      # otherwise every time we run docker compose uo or down we fail to start due to Cookie
+      # See: https://github.com/apache/bookkeeper/blob/405e72acf42bb1104299647ea8840d805094c787/bookkeeper-server/src/main/java/org/apache/bookkeeper/bookie/Cookie.java#L57-68
+      - advertisedAddress=west-bookie
+      - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
+    depends_on:
+      west-zookeeper:
+        condition: service_healthy
+      west-pulsar-init:
+        condition: service_completed_successfully
+    # Map the local directory to the container to avoid bookie startup failure due to insufficient container disks.
+    volumes:
+      - ./data/west-bookkeeper:/pulsar/data/bookkeeper
+    command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf && exec bin/pulsar bookie"
+
+  # Start west broker
+  west-broker:
+    image: apachepulsar/pulsar:latest
+    container_name: west-broker
+    hostname: west-broker
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - metadataStoreUrl=zk:west-zookeeper:2181
+      - configurationMetadataStoreUrl=zk:global-zookeeper:2184
+      - clusterName=west
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      # - advertisedAddress=broker
+      # - advertisedListeners=external:pulsar://127.0.0.1:6650
+      - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
+    depends_on:
+      global-zookeeper:
+        condition: service_healthy
+      west-zookeeper:
+        condition: service_healthy
+      west-bookie:
+        condition: service_started
+    # ports:
+    #   - "6650:6650"
+    #   - "8080:8080"
+    command: >
+      bash -c "bin/apply-config-from-env.py conf/broker.conf && \
+      exec bin/pulsar broker"
+
+  # Create my-prop/[east,west,global]/my-ns
+  namespace-setup:
+    image: apachepulsar/pulsar
+    container_name: namespace-setup
+    depends_on:
+      east-broker:
+        condition: service_started
+      west-broker:
+        condition: service_started
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - brokerServiceUrl=pulsar://east-broker:6650
+      - webServiceUrl=http://east-broker:8080
+    command: >
+      /bin/bash -c
+      "bin/apply-config-from-env.py conf/client.conf && \
+      (bin/pulsar-admin tenants list | grep -q 'my-prop') || (bin/pulsar-admin tenants create \
+      my-prop --admin-roles my-role --allowed-clusters east,west && \
+      bin/pulsar-admin namespaces create my-prop/my-ns && \
+      bin/pulsar-admin namespaces set-clusters --clusters east,west my-prop/my-ns)"
+
+  # Start east client
+  east-client:
+    image: apachepulsar/pulsar
+    container_name: east-client
+    depends_on:
+      namespace-setup:
+        condition: service_completed_successfully
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - PULSAR_LOG_LEVEL=error
+      - brokerServiceUrl=pulsar://east-broker:6650
+      - webServiceUrl=http://east-broker:8080
+    tty: true
+    stdin_open: true
+    ports:
+      - "6650:6650"
+      - "8080:8080"
+    command: >
+      /bin/bash -c "bin/apply-config-from-env.py conf/client.conf && /bin/bash"
+
+  # Start west client
+  west-client:
+    image: apachepulsar/pulsar
+    container_name: west-client
+    depends_on:
+      namespace-setup:
+        condition: service_completed_successfully
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - PULSAR_LOG_LEVEL=error
+      - brokerServiceUrl=pulsar://west-broker:6650
+      - webServiceUrl=http://west-broker:8080
+    tty: true
+    stdin_open: true
+    ports:
+      - "6652:6650"
+      - "8082:8080"
+    command: >
+      /bin/bash -c "bin/apply-config-from-env.py conf/client.conf && /bin/bash"
