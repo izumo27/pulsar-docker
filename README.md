@@ -1,3 +1,6 @@
+## pulsar-docker
+Apche Pulsar cluster running locally. deployed with Docker Compose
+
 ## Requirements
 - docker
 
