@@ -42,4 +42,4 @@ $ docker compose down
 ```
 
 ## Note
-This containers require a large amount of memory.
+This container requires a large amount of memory.
