@@ -17,7 +17,8 @@ services:
       - ./data/global-zookeeper:/pulsar/data/global-zookeeper
       - ./scripts/pulsar-global-zookeeper-ruok.sh:/pulsar/bin/pulsar-global-zookeeper-ruok.sh
     command: >
-      bash -c "bin/apply-config-from-env.py conf/global_zookeeper.conf && \
+      bash -c "rm -rf /pulsar/data/global-zookeeper/* && \
+             bin/apply-config-from-env.py conf/global_zookeeper.conf && \
              bin/generate-zookeeper-config.sh conf/global_zookeeper.conf && \
              exec bin/pulsar global-zookeeper conf/global_zookeeper.conf"
     healthcheck:
@@ -39,7 +40,8 @@ services:
       - metadataStoreUrl=zk:east-zookeeper:2181
       - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
     command: >
-      bash -c "bin/apply-config-from-env.py conf/zookeeper.conf && \
+      bash -c "rm -rf /pulsar/data/zookeeper/* && \
+             bin/apply-config-from-env.py conf/zookeeper.conf && \
              bin/generate-zookeeper-config.sh conf/zookeeper.conf && \
              exec bin/pulsar zookeeper"
     healthcheck:
@@ -53,6 +55,7 @@ services:
     container_name: east-pulsar-init
     hostname: east-pulsar-init
     image: apachepulsar/pulsar:latest
+    restart: on-failure
     networks:
       - pulsar
     command: >
@@ -90,7 +93,10 @@ services:
     # Map the local directory to the container to avoid bookie startup failure due to insufficient container disks.
     volumes:
       - ./data/east-bookkeeper:/pulsar/data/bookkeeper
-    command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf && exec bin/pulsar bookie"
+    command: >
+      bash -c "rm -rf /pulsar/data/bookkeeper/* && \
+             bin/apply-config-from-env.py conf/bookkeeper.conf && \
+             exec bin/pulsar bookie"
 
   # Start east broker
   east-broker:
@@ -122,7 +128,7 @@ services:
     #   - "8080:8080"
     command: >
       bash -c "bin/apply-config-from-env.py conf/broker.conf && \
-      exec bin/pulsar broker"
+             exec bin/pulsar broker"
 
   # Start west zookeeper
   west-zookeeper:
@@ -137,7 +143,8 @@ services:
       - metadataStoreUrl=zk:west-zookeeper:2181
       - PULSAR_MEM=-Xms96m -Xmx96m -XX:MaxDirectMemorySize=96m
     command: >
-      bash -c "bin/apply-config-from-env.py conf/zookeeper.conf && \
+      bash -c "rm -rf /pulsar/data/zookeeper/* && \
+             bin/apply-config-from-env.py conf/zookeeper.conf && \
              bin/generate-zookeeper-config.sh conf/zookeeper.conf && \
              exec bin/pulsar zookeeper"
     healthcheck:
@@ -151,6 +158,7 @@ services:
     container_name: west-pulsar-init
     hostname: west-pulsar-init
     image: apachepulsar/pulsar:latest
+    restart: on-failure
     networks:
       - pulsar
     command: >
@@ -188,7 +196,10 @@ services:
     # Map the local directory to the container to avoid bookie startup failure due to insufficient container disks.
     volumes:
       - ./data/west-bookkeeper:/pulsar/data/bookkeeper
-    command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf && exec bin/pulsar bookie"
+    command: >
+      bash -c "rm -rf /pulsar/data/bookkeeper/* && \
+             bin/apply-config-from-env.py conf/bookkeeper.conf && \
+             exec bin/pulsar bookie"
 
   # Start west broker
   west-broker:
@@ -220,7 +231,7 @@ services:
     #   - "8080:8080"
     command: >
       bash -c "bin/apply-config-from-env.py conf/broker.conf && \
-      exec bin/pulsar broker"
+             exec bin/pulsar broker"
 
   # Create my-prop/[east,west,global]/my-ns
   namespace-setup:
@@ -238,12 +249,11 @@ services:
       - brokerServiceUrl=pulsar://east-broker:6650
       - webServiceUrl=http://east-broker:8080
     command: >
-      /bin/bash -c
-      "bin/apply-config-from-env.py conf/client.conf && \
-      (bin/pulsar-admin tenants list | grep -q 'my-prop') || (bin/pulsar-admin tenants create \
-      my-prop --admin-roles my-role --allowed-clusters east,west && \
-      bin/pulsar-admin namespaces create my-prop/my-ns && \
-      bin/pulsar-admin namespaces set-clusters --clusters east,west my-prop/my-ns)"
+      bash -c "bin/apply-config-from-env.py conf/client.conf && \
+             (bin/pulsar-admin tenants list | grep -q 'my-prop') || \
+             (bin/pulsar-admin tenants create my-prop --admin-roles my-role --allowed-clusters east,west && \
+             bin/pulsar-admin namespaces create my-prop/my-ns && \
+             bin/pulsar-admin namespaces set-clusters --clusters east,west my-prop/my-ns)"
 
   # Start east client
   east-client:
@@ -265,7 +275,7 @@ services:
       - "6650:6650"
       - "8080:8080"
     command: >
-      /bin/bash -c "bin/apply-config-from-env.py conf/client.conf && /bin/bash"
+      bash -c "bin/apply-config-from-env.py conf/client.conf && /bin/bash"
 
   # Start west client
   west-client:
@@ -287,4 +297,4 @@ services:
       - "6652:6650"
       - "8082:8080"
     command: >
-      /bin/bash -c "bin/apply-config-from-env.py conf/client.conf && /bin/bash"
+      bash -c "bin/apply-config-from-env.py conf/client.conf && /bin/bash"
